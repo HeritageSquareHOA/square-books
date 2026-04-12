@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Square Books — Heritage Square</title>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root {
     --ember:       #1a0a00;
@@ -1072,8 +1073,8 @@
       <p>Heritage Square &nbsp;·&nbsp; Est. 1992</p>
     </div>
     <div class="form-group">
-      <label>Username</label>
-      <input type="text" id="login-user" placeholder="Enter username" autocomplete="username">
+      <label>Email</label>
+      <input type="email" id="login-user" placeholder="your@email.com" autocomplete="email">
     </div>
     <div class="form-group">
       <label>Password</label>
@@ -2071,29 +2072,22 @@
 'use strict';
 
 // ── STATE ──────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// SQUARE BOOKS — Supabase Data Layer
+// ══════════════════════════════════════════════════════════════
+const SUPABASE_URL = 'https://sdadujimrwekhdndnxkc.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_9n5xkjRYS7-IjMTINb4y2g_bj-rSk0z';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ── IN-MEMORY STATE ────────────────────────────────────────────
 let state = {
-  homeowners: [],
-  invoices: [],
-  payments: [],
-  vendors: [],
-  bills: [],
-  billPayments: [],
+  homeowners: [], invoices: [], payments: [],
+  vendors: [], bills: [], billPayments: [],
   bankTransactions: [],
-  budgetItems: [],
-  recurring: null,
-  users: [
-    { username: 'admin', password: 'admin123', role: 'Admin', forceChange: false, lastLogin: null },
-    { username: 'treasurer', password: 'temp123', role: 'Treasurer', forceChange: true, lastLogin: null },
-    { username: 'board', password: 'temp123', role: 'Read-Only', forceChange: true, lastLogin: null }
-  ],
-  nextHwId: 1,
-  nextInvId: 1000,
-  nextPmtId: 1,
-  nextVendorId: 1,
-  nextBillId: 2000,
-  nextBpId: 1,
-  nextBtId: 1,
-  nextBudgetId: 1
+  proposedIncome: [], proposedExpense: [],
+  bsManualAssets: [], bsManualLiabilities: [],
+  bsBSCommentary: {}, pyisCommentary: {},
+  recurring: null
 };
 
 let currentUser = null;
@@ -2101,25 +2095,8 @@ let pendingRestoreData = null;
 let matchingBtId = null;
 let matchSelections = [];
 
-// ── PERSISTENCE ────────────────────────────────────────────────────────────
-function saveState() {
-  const s = { ...state };
-  delete s.users;
-  localStorage.setItem('hoa_treasury_state', JSON.stringify(s));
-  localStorage.setItem('hoa_treasury_users', JSON.stringify(state.users));
-}
-
-function loadState() {
-  try {
-    const s = localStorage.getItem('hoa_treasury_state');
-    const u = localStorage.getItem('hoa_treasury_users');
-    if (s) { const p = JSON.parse(s); Object.assign(state, p); }
-    if (u) { state.users = JSON.parse(u); }
-  } catch(e) { console.warn('State load error', e); }
-}
-
-// ── UTILITIES ──────────────────────────────────────────────────────────────
-const fmt = n => '$' + Number(n||0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+// ── UTILITIES ──────────────────────────────────────────────────
+const fmt   = n => '$' + Number(n||0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
 const today = () => new Date().toISOString().slice(0,10);
 
 function toast(msg, duration=2800) {
@@ -2129,123 +2106,156 @@ function toast(msg, duration=2800) {
   setTimeout(() => t.classList.remove('show'), duration);
 }
 
-function openModal(id) {
-  document.getElementById(id).classList.add('open');
+function openModal(id)  { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+function showLoading(msg='Loading...') {
+  let el = document.getElementById('sb-loading');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'sb-loading';
+    el.style.cssText = 'position:fixed;inset:0;background:rgba(26,10,0,0.65);display:flex;align-items:center;justify-content:center;z-index:99999;';
+    el.innerHTML = `<div style="background:#fff;border-radius:12px;padding:28px 40px;text-align:center;font-family:'IBM Plex Sans',sans-serif;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+      <div style="font-size:28px;margin-bottom:10px;">🔥</div>
+      <div style="font-weight:600;color:#1a0a00;font-size:14px;" id="sb-loading-msg">${msg}</div>
+    </div>`;
+    document.body.appendChild(el);
+  }
+  document.getElementById('sb-loading-msg').textContent = msg;
+  el.style.display = 'flex';
+}
+function hideLoading() {
+  const el = document.getElementById('sb-loading');
+  if (el) el.style.display = 'none';
 }
 
-function closeModal(id) {
-  document.getElementById(id).classList.remove('open');
+// ── PERSISTENCE — no-ops, Supabase handles persistence ────────
+function saveState() {}
+function loadState()  {}
+
+// ── ROW MAPPERS ────────────────────────────────────────────────
+const mapHw  = r => ({ id:r.id, lastName:r.last_name, address:r.address, email:r.email||'', unit:r.unit||'', notes:r.notes||'', status:r.status||'active' });
+const mapInv = r => ({ id:r.id, homeownerId:r.homeowner_id, date:r.date, dueDate:r.due_date||'', description:r.description, amount:+r.amount, status:r.status, memo:r.memo||'', voidMemo:r.void_memo||'' });
+const mapPmt = r => ({ id:r.id, homeownerId:r.homeowner_id, invoiceId:r.invoice_id, date:r.date, amount:+r.amount, method:r.method, ref:r.ref||'', memo:r.memo||'', status:r.status, bankMatchId:r.bank_match_id });
+const mapV   = r => ({ id:r.id, name:r.name, category:r.category, email:r.email||'', phone:r.phone||'', notes:r.notes||'' });
+const mapB   = r => ({ id:r.id, vendorId:r.vendor_id, date:r.date, dueDate:r.due_date||'', description:r.description, amount:+r.amount, status:r.status, memo:r.memo||'', voidMemo:r.void_memo||'' });
+const mapBp  = r => ({ id:r.id, billId:r.bill_id, vendorId:r.vendor_id, date:r.date, amount:+r.amount, method:r.method, ref:r.ref||'', memo:r.memo||'', status:r.status, bankMatchId:r.bank_match_id });
+const mapBt  = r => ({ id:r.id, date:r.date, desc:r.description, type:r.type, amount:+r.amount, matched:r.matched, matchedItems:r.matched_items });
+
+// ── LOAD ALL DATA ──────────────────────────────────────────────
+async function loadAllData() {
+  try {
+    const [hws,invs,pmts,vs,bs,bps,bts,pb,bsm,pyc] = await Promise.all([
+      sb.from('homeowners').select('*').order('last_name'),
+      sb.from('invoices').select('*').order('id'),
+      sb.from('payments').select('*').order('id'),
+      sb.from('vendors').select('*').order('name'),
+      sb.from('bills').select('*').order('id'),
+      sb.from('bill_payments').select('*').order('id'),
+      sb.from('bank_transactions').select('*').order('date'),
+      sb.from('proposed_budget').select('*').order('sort_order'),
+      sb.from('bs_manual').select('*').order('sort_order'),
+      sb.from('pyis_commentary').select('*')
+    ]);
+    state.homeowners       = (hws.data||[]).map(mapHw);
+    state.invoices         = (invs.data||[]).map(mapInv);
+    state.payments         = (pmts.data||[]).map(mapPmt);
+    state.vendors          = (vs.data||[]).map(mapV);
+    state.bills            = (bs.data||[]).map(mapB);
+    state.billPayments     = (bps.data||[]).map(mapBp);
+    state.bankTransactions = (bts.data||[]).map(mapBt);
+    state.proposedIncome   = (pb.data||[]).filter(l=>l.type==='income').map(l=>({id:l.id,category:l.category,proposed:+l.proposed||0,commentary:l.commentary||''}));
+    state.proposedExpense  = (pb.data||[]).filter(l=>l.type==='expense').map(l=>({id:l.id,category:l.category,proposed:+l.proposed||0,commentary:l.commentary||''}));
+    state.bsManualAssets      = (bsm.data||[]).filter(r=>r.section==='assets').map(r=>({id:r.id,label:r.label,balance:+r.balance||0,commentary:r.commentary||''}));
+    state.bsManualLiabilities = (bsm.data||[]).filter(r=>r.section==='liabilities').map(r=>({id:r.id,label:r.label,balance:+r.balance||0,commentary:r.commentary||''}));
+    state.pyisCommentary = {};
+    (pyc.data||[]).forEach(r => { state.pyisCommentary[r.category] = r.commentary||''; });
+  } catch(e) { console.error('loadAllData error:', e); toast('⚠ Error loading data'); }
 }
 
-function hwName(hw) {
-  if (!hw) return '—';
-  return hw.lastName + ' · ' + hw.address;
-}
-
-function getHw(id) { return state.homeowners.find(h => h.id == id); }
-function getVendor(id) { return state.vendors.find(v => v.id == id); }
-
-function invoiceBalance(inv) {
-  const paid = state.payments
-    .filter(p => p.invoiceId == inv.id && p.status !== 'voided')
-    .reduce((s,p) => s + p.amount, 0);
-  return inv.amount - paid;
-}
-
-function billBalance(bill) {
-  const paid = state.billPayments
-    .filter(p => p.billId == bill.id && p.status !== 'voided')
-    .reduce((s,p) => s + p.amount, 0);
-  return bill.amount - paid;
-}
-
-function invoiceStatus(inv) {
-  if (inv.status === 'voided') return 'voided';
-  const bal = invoiceBalance(inv);
-  if (bal <= 0) return 'paid';
-  if (inv.dueDate && inv.dueDate < today()) return 'overdue';
-  return 'due';
-}
-
-function billStatus(bill) {
-  if (bill.status === 'voided') return 'voided';
-  const bal = billBalance(bill);
-  if (bal <= 0) return 'paid';
-  return 'due';
-}
-
-function badgeHtml(status) {
-  const map = { paid:'badge-paid', due:'badge-due', overdue:'badge-overdue', voided:'badge-voided' };
-  return `<span class="badge ${map[status]||'badge-due'}">${status.charAt(0).toUpperCase()+status.slice(1)}</span>`;
-}
-
-// ── AUTH ───────────────────────────────────────────────────────────────────
-function doLogin() {
-  const u = document.getElementById('login-user').value.trim();
-  const p = document.getElementById('login-pass').value;
-  const user = state.users.find(x => x.username === u && x.password === p);
-  if (!user) {
-    document.getElementById('login-error').style.display = 'block';
+// ── AUTH ───────────────────────────────────────────────────────
+async function doLogin() {
+  const email = document.getElementById('login-user').value.trim();
+  const pass  = document.getElementById('login-pass').value;
+  const errEl = document.getElementById('login-error');
+  errEl.style.display = 'none';
+  showLoading('Signing in...');
+  const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
+  if (error || !data.user) { hideLoading(); errEl.style.display='block'; return; }
+  const { data: ur } = await sb.from('users').select('*').eq('id', data.user.id).single();
+  if (!ur) {
+    await sb.auth.signOut(); hideLoading();
+    errEl.textContent='Account not configured. Contact your administrator.';
+    errEl.style.display='block'; return;
+  }
+  await sb.from('users').update({ last_login: new Date().toISOString() }).eq('id', data.user.id);
+  currentUser = { id:data.user.id, email:data.user.email, username:ur.username, role:ur.role, forceChange:ur.force_change };
+  hideLoading();
+  if (currentUser.forceChange) {
+    document.getElementById('login-screen').style.display='none';
+    document.getElementById('force-pw-screen').style.display='flex';
     return;
   }
-  document.getElementById('login-error').style.display = 'none';
-  user.lastLogin = new Date().toISOString();
-  saveState();
-  currentUser = user;
-  if (user.forceChange) {
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('force-pw-screen').style.display = 'flex';
-    return;
-  }
-  launchApp();
+  await launchApp();
 }
 
 document.getElementById('login-pass').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
 document.getElementById('login-user').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
 
-function doForcePwChange() {
-  const n = document.getElementById('fpw-new').value;
-  const c = document.getElementById('fpw-confirm').value;
-  const err = document.getElementById('fpw-error');
-  if (n.length < 6) { err.textContent='Password must be at least 6 characters.'; err.style.display='block'; return; }
-  if (n !== c) { err.textContent='Passwords do not match.'; err.style.display='block'; return; }
-  currentUser.password = n;
-  currentUser.forceChange = false;
-  saveState();
-  document.getElementById('force-pw-screen').style.display = 'none';
-  launchApp();
+async function doForcePwChange() {
+  const n=document.getElementById('fpw-new').value, c=document.getElementById('fpw-confirm').value;
+  const err=document.getElementById('fpw-error');
+  if(n.length<8){err.textContent='Password must be at least 8 characters.';err.style.display='block';return;}
+  if(n!==c){err.textContent='Passwords do not match.';err.style.display='block';return;}
+  showLoading('Updating password...');
+  const {error}=await sb.auth.updateUser({password:n});
+  if(error){hideLoading();err.textContent='Error updating password.';err.style.display='block';return;}
+  await sb.from('users').update({force_change:false}).eq('id',currentUser.id);
+  currentUser.forceChange=false; hideLoading();
+  document.getElementById('force-pw-screen').style.display='none';
+  await launchApp();
 }
 
-function doLogout() {
-  currentUser = null;
-  document.getElementById('app').style.display = 'none';
-  document.getElementById('login-screen').style.display = 'flex';
-  document.getElementById('login-user').value = '';
-  document.getElementById('login-pass').value = '';
+async function doLogout() {
+  await sb.auth.signOut();
+  currentUser=null;
+  state={homeowners:[],invoices:[],payments:[],vendors:[],bills:[],billPayments:[],bankTransactions:[],proposedIncome:[],proposedExpense:[],bsManualAssets:[],bsManualLiabilities:[],bsBSCommentary:{},pyisCommentary:{},recurring:null};
+  document.getElementById('app').style.display='none';
+  document.getElementById('login-screen').style.display='flex';
+  document.getElementById('login-user').value='';
+  document.getElementById('login-pass').value='';
 }
 
-function launchApp() {
-  document.getElementById('login-screen').style.display = 'none';
-  document.getElementById('app').style.display = 'flex';
-  document.getElementById('user-display').textContent = currentUser.username;
-  document.getElementById('user-role-display').textContent = currentUser.role;
-  document.getElementById('user-avatar').textContent = currentUser.username.slice(0,2).toUpperCase();
-
-  // Admin-only nav
-  const isAdmin = currentUser.role === 'Admin';
-  document.getElementById('admin-nav-section').style.display = isAdmin ? '' : 'none';
-  document.getElementById('admin-nav-item').style.display = isAdmin ? '' : 'none';
-
-  // Read-only hides write buttons
-  if (currentUser.role === 'Read-Only') {
-    document.querySelectorAll('.btn-navy, .btn-gold').forEach(b => {
-      if (!b.classList.contains('btn-login')) b.style.display = 'none';
-    });
+async function launchApp() {
+  showLoading('Loading data...');
+  await loadAllData();
+  hideLoading();
+  document.getElementById('login-screen').style.display='none';
+  document.getElementById('app').style.display='flex';
+  document.getElementById('user-display').textContent=currentUser.username;
+  document.getElementById('user-role-display').textContent=currentUser.role;
+  document.getElementById('user-avatar').textContent=currentUser.username.slice(0,2).toUpperCase();
+  const isAdmin=currentUser.role==='Admin';
+  document.getElementById('admin-nav-section').style.display=isAdmin?'':'none';
+  document.getElementById('admin-nav-item').style.display=isAdmin?'':'none';
+  if(currentUser.role==='Read-Only'){
+    document.querySelectorAll('.btn-navy,.btn-gold').forEach(b=>{ if(!b.classList.contains('btn-login')) b.style.display='none'; });
   }
+  populateReportYears(); nav('dashboard'); renderAll();
+}
 
-  populateReportYears();
-  nav('dashboard');
-  renderAll();
+async function checkSession() {
+  const {data:{session}}=await sb.auth.getSession();
+  if(!session) return;
+  const {data:ur}=await sb.from('users').select('*').eq('id',session.user.id).single();
+  if(!ur) return;
+  currentUser={id:session.user.id,email:session.user.email,username:ur.username,role:ur.role,forceChange:ur.force_change};
+  if(currentUser.forceChange){
+    document.getElementById('login-screen').style.display='none';
+    document.getElementById('force-pw-screen').style.display='flex';
+    return;
+  }
+  await launchApp();
 }
 
 // ── NAVIGATION ─────────────────────────────────────────────────────────────
@@ -4516,99 +4526,342 @@ function deleteUser(username) {
   toast('✓ User removed');
 }
 
-// ── BACKUP / RESTORE ───────────────────────────────────────────────────────
-function doBackup() {
-  const backup = {
-    _meta: { app: 'Square Books', version: 1, date: new Date().toISOString(), counts: {
-      homeowners: state.homeowners.length,
-      invoices: state.invoices.length,
-      payments: state.payments.length,
-      vendors: state.vendors.length,
-      bills: state.bills.length
-    }},
-    ...state
-  };
-  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `HOA-Treasury-Backup-${today()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-  toast('✓ Backup downloaded');
+// ── SUPABASE CRUD — HOMEOWNERS ────────────────────────────────
+async function saveHomeowner() {
+  const id=document.getElementById('hw-id').value;
+  const lastName=document.getElementById('hw-last').value.trim();
+  const address=document.getElementById('hw-address').value.trim();
+  if(!lastName||!address){alert('Last name and address are required.');return;}
+  const payload={last_name:lastName,address,unit:document.getElementById('hw-unit').value.trim(),email:document.getElementById('hw-email').value.trim(),notes:document.getElementById('hw-notes').value.trim()};
+  showLoading('Saving...');
+  if(id) await sb.from('homeowners').update(payload).eq('id',parseInt(id));
+  else   await sb.from('homeowners').insert([{...payload,status:'active'}]);
+  await loadAllData(); hideLoading(); closeModal('modal-homeowner'); renderAll();
+  toast(id?'✓ Homeowner updated':'✓ Homeowner added');
 }
 
-function triggerRestore() {
-  if (!confirm('Restoring will overwrite all current data. Continue?')) return;
-  document.getElementById('restore-input').click();
+// ── INVOICES ───────────────────────────────────────────────────
+async function saveInvoice() {
+  const hwId=parseInt(document.getElementById('inv-homeowner').value);
+  const desc=document.getElementById('inv-desc').value.trim();
+  const amount=parseFloat(document.getElementById('inv-amount').value);
+  const date=document.getElementById('inv-date').value;
+  const due=document.getElementById('inv-due').value;
+  if(!hwId||!desc||!amount||!date){alert('Please fill all required fields.');return;}
+  showLoading('Saving...');
+  await sb.from('invoices').insert([{homeowner_id:hwId,date,due_date:due||null,description:desc,amount,status:'open',memo:document.getElementById('inv-memo').value.trim()}]);
+  await loadAllData(); hideLoading(); closeModal('modal-invoice'); renderAll();
+  toast('✓ Invoice created');
 }
 
-function doRestore(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = e => {
-    try {
-      const backup = JSON.parse(e.target.result);
-      if (!backup._meta || backup._meta.app !== 'Square Books') { alert('Invalid backup file.'); return; }
-      pendingRestoreData = backup;
-      document.getElementById('restore-preview').innerHTML = `
-        <strong>Backup Date:</strong> ${new Date(backup._meta.date).toLocaleString()}<br>
-        <strong>Homeowners:</strong> ${backup._meta.counts.homeowners} &nbsp;·&nbsp;
-        <strong>Invoices:</strong> ${backup._meta.counts.invoices} &nbsp;·&nbsp;
-        <strong>Payments:</strong> ${backup._meta.counts.payments}
-      `;
-      openModal('modal-restore-confirm');
-    } catch(err) { alert('Could not read backup file.'); }
-  };
-  reader.readAsText(file);
-  event.target.value = '';
+async function saveBulkInvoice() {
+  const active=state.homeowners.filter(h=>h.status!=='inactive');
+  const desc=document.getElementById('bulk-desc').value.trim();
+  const amount=parseFloat(document.getElementById('bulk-amount').value);
+  const date=document.getElementById('bulk-date').value;
+  const due=document.getElementById('bulk-due').value;
+  if(!desc||!amount||!date){alert('Please fill all required fields.');return;}
+  const rows=active.filter(hw=>!state.invoices.find(i=>i.homeownerId==hw.id&&i.description===desc&&i.status!=='voided'))
+    .map(hw=>({homeowner_id:hw.id,date,due_date:due||null,description:desc,amount,status:'open',memo:''}));
+  if(!rows.length){alert('All homeowners already have this invoice.');return;}
+  showLoading(`Creating ${rows.length} invoices...`);
+  await sb.from('invoices').insert(rows);
+  await loadAllData(); hideLoading(); closeModal('modal-bulk-invoice'); renderAll();
+  toast(`✓ Created ${rows.length} invoices`);
 }
 
-function confirmRestore() {
-  if (!pendingRestoreData) return;
-  const { _meta, ...restored } = pendingRestoreData;
-  Object.assign(state, restored);
-  saveState(); closeModal('modal-restore-confirm');
-  renderAll();
-  toast('✓ Backup restored successfully');
-  pendingRestoreData = null;
+async function saveRecurring() {
+  const payload={freq:document.getElementById('rec-freq').value,amount:parseFloat(document.getElementById('rec-amount').value)||0,description:document.getElementById('rec-desc').value,next_date:document.getElementById('rec-next').value||null,status:document.getElementById('rec-status').value};
+  showLoading('Saving...');
+  const {data:ex}=await sb.from('recurring').select('id').limit(1);
+  if(ex?.length) await sb.from('recurring').update(payload).eq('id',ex[0].id);
+  else           await sb.from('recurring').insert([payload]);
+  hideLoading(); closeModal('modal-recurring'); toast('✓ Recurring schedule saved');
 }
 
-// ── HELPERS ────────────────────────────────────────────────────────────────
-function populateSelect(id, items, mapper, emptyLabel='— Select —') {
-  const sel = document.getElementById(id);
-  if (!sel) return;
-  const cur = sel.value;
-  sel.innerHTML = `<option value="">${emptyLabel}</option>`;
-  items.forEach(item => {
-    const { value, label } = mapper(item);
-    const o = document.createElement('option');
-    o.value = value; o.textContent = label;
-    sel.appendChild(o);
-  });
-  if (cur) sel.value = cur;
+// ── PAYMENTS ───────────────────────────────────────────────────
+async function savePayment() {
+  const hwId=parseInt(document.getElementById('pmt-homeowner').value);
+  const amount=parseFloat(document.getElementById('pmt-amount').value);
+  const date=document.getElementById('pmt-date').value;
+  if(!hwId||!amount||!date){alert('Homeowner, amount, and date are required.');return;}
+  showLoading('Saving...');
+  await sb.from('payments').insert([{homeowner_id:hwId,invoice_id:parseInt(document.getElementById('pmt-invoice').value)||null,date,amount,status:'active',method:document.getElementById('pmt-method').value,ref:document.getElementById('pmt-ref').value.trim(),memo:document.getElementById('pmt-memo').value.trim()}]);
+  await loadAllData(); hideLoading(); closeModal('modal-payment'); renderAll();
+  toast('✓ Payment recorded');
 }
 
-function downloadCSV(rows, filename) {
-  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href=url; a.download=filename; a.click();
-  URL.revokeObjectURL(url);
+// ── VENDORS ────────────────────────────────────────────────────
+async function saveVendor() {
+  const id=document.getElementById('vendor-id').value;
+  const name=document.getElementById('vendor-name').value.trim();
+  if(!name){alert('Vendor name is required.');return;}
+  const payload={name,category:document.getElementById('vendor-category').value,email:document.getElementById('vendor-email').value.trim(),phone:document.getElementById('vendor-phone').value.trim(),notes:document.getElementById('vendor-notes').value.trim()};
+  showLoading('Saving...');
+  if(id) await sb.from('vendors').update(payload).eq('id',parseInt(id));
+  else { await sb.from('vendors').insert([payload]); document.getElementById('vendor-id').value=''; }
+  await loadAllData(); hideLoading(); closeModal('modal-vendor'); renderAll();
+  toast(id?'✓ Vendor updated':'✓ Vendor added');
 }
 
-// Set today's date on date fields when modals open
-document.querySelectorAll('input[type=date]').forEach(inp => {
-  if (!inp.value) inp.value = today();
-});
+// ── BILLS ──────────────────────────────────────────────────────
+async function saveBill() {
+  const vendorId=parseInt(document.getElementById('bill-vendor').value);
+  const desc=document.getElementById('bill-desc').value.trim();
+  const amount=parseFloat(document.getElementById('bill-amount').value);
+  const date=document.getElementById('bill-date').value;
+  if(!vendorId||!desc||!amount||!date){alert('Please fill all required fields.');return;}
+  showLoading('Saving...');
+  await sb.from('bills').insert([{vendor_id:vendorId,date,due_date:document.getElementById('bill-due').value||null,description:desc,amount,status:'open',memo:document.getElementById('bill-memo').value.trim()}]);
+  await loadAllData(); hideLoading(); closeModal('modal-bill'); renderAll();
+  toast('✓ Bill entered');
+}
 
-// Override the + Add Homeowner button to clear form
-document.querySelector('[onclick="openModal(\'modal-homeowner\')"]')?.addEventListener('click', openAddHomeowner);
+async function savePayBill() {
+  const billId=parseInt(document.getElementById('pay-bill-id').value);
+  const bill=state.bills.find(b=>b.id===billId);
+  const amount=parseFloat(document.getElementById('pay-bill-amount').value);
+  const date=document.getElementById('pay-bill-date').value;
+  if(!amount||!date){alert('Amount and date are required.');return;}
+  showLoading('Saving...');
+  await sb.from('bill_payments').insert([{bill_id:billId,vendor_id:bill.vendorId,date,amount,status:'active',method:document.getElementById('pay-bill-method').value,ref:document.getElementById('pay-bill-ref').value.trim(),memo:document.getElementById('pay-bill-memo').value.trim()}]);
+  await loadAllData(); hideLoading(); closeModal('modal-pay-bill'); renderAll();
+  toast('✓ Bill payment recorded');
+}
 
-// ── INIT ───────────────────────────────────────────────────────────────────
-loadState();
-document.getElementById('bulk-count').textContent = state.homeowners.filter(h=>h.status!=='inactive').length;
+// ── REVERSALS ─────────────────────────────────────────────────
+async function confirmReversal() {
+  const type=document.getElementById('reversal-type').value;
+  const id=parseInt(document.getElementById('reversal-id').value);
+  const memo=document.getElementById('reversal-memo').value.trim();
+  if(!memo){alert('A reason is required.');return;}
+  showLoading('Processing...');
+  if(type==='invoice'){
+    await sb.from('invoices').update({status:'voided',void_memo:memo,void_date:today()}).eq('id',id);
+    const inv=state.invoices.find(i=>i.id===id);
+    if(inv) await sb.from('invoices').insert([{homeowner_id:inv.homeownerId,date:today(),description:`REVERSAL: ${inv.description}`,amount:-inv.amount,status:'voided',memo:`Reversal of #${id}: ${memo}`}]);
+  } else if(type==='payment') {
+    await sb.from('payments').update({status:'voided',void_memo:memo,void_date:today()}).eq('id',id);
+  } else if(type==='bill') {
+    await sb.from('bills').update({status:'voided',void_memo:memo,void_date:today()}).eq('id',id);
+  }
+  await loadAllData(); hideLoading(); closeModal('modal-reversal'); renderAll();
+  toast('✓ Entry voided');
+}
+
+// ── BANK RECONCILIATION ────────────────────────────────────────
+async function saveBankTrans() {
+  const date=document.getElementById('bt-date').value;
+  const desc=document.getElementById('bt-desc').value.trim();
+  const type=document.getElementById('bt-type').value;
+  const amount=parseFloat(document.getElementById('bt-amount').value);
+  if(!date||!desc||!amount){alert('All fields required.');return;}
+  showLoading('Saving...');
+  await sb.from('bank_transactions').insert([{date,description:desc,type,amount,matched:false}]);
+  await loadAllData(); hideLoading(); closeModal('modal-bank-trans'); renderReconciliation();
+  toast('✓ Bank transaction added');
+}
+
+async function confirmMatch() {
+  const bt=state.bankTransactions.find(t=>t.id===matchingBtId);
+  if(!bt) return;
+  const checked=[...document.querySelectorAll('#match-items-list input:checked')];
+  const matchedItems=[];
+  showLoading('Matching...');
+  for(const cb of checked){
+    const [type,idStr]=cb.value.split('-'); const itemId=parseInt(idStr);
+    if(type==='pmt'){await sb.from('payments').update({bank_match_id:bt.id}).eq('id',itemId); const p=state.payments.find(x=>x.id===itemId); if(p) matchedItems.push({type:'payment',id:itemId,amount:p.amount});}
+    if(type==='bp') {await sb.from('bill_payments').update({bank_match_id:bt.id}).eq('id',itemId); const p=state.billPayments.find(x=>x.id===itemId); if(p) matchedItems.push({type:'billpayment',id:itemId,amount:p.amount});}
+  }
+  await sb.from('bank_transactions').update({matched:true,matched_items:matchedItems}).eq('id',bt.id);
+  await loadAllData(); hideLoading(); closeModal('modal-match'); renderReconciliation();
+  toast(`✓ Matched ${matchedItems.length} item(s)`);
+}
+
+async function unmatch(btId) {
+  const bt=state.bankTransactions.find(t=>t.id===btId);
+  if(!bt||!bt.matchedItems) return;
+  showLoading('Unmatching...');
+  for(const item of bt.matchedItems){
+    if(item.type==='payment')     await sb.from('payments').update({bank_match_id:null}).eq('id',item.id);
+    if(item.type==='billpayment') await sb.from('bill_payments').update({bank_match_id:null}).eq('id',item.id);
+  }
+  await sb.from('bank_transactions').update({matched:false,matched_items:null}).eq('id',btId);
+  await loadAllData(); hideLoading(); renderReconciliation();
+  toast('✓ Unmatched');
+}
+
+// ── BUDGET ─────────────────────────────────────────────────────
+async function saveBudgetItem() {
+  const type=document.getElementById('budget-item-type').value;
+  const cat=document.getElementById('budget-cat').value.trim();
+  const proposed=parseFloat(document.getElementById('budget-amount').value)||0;
+  const notes=document.getElementById('budget-notes').value.trim();
+  if(!cat){alert('Line item name is required.');return;}
+  showLoading('Saving...');
+  await sb.from('proposed_budget').insert([{type,category:cat,proposed,commentary:notes,sort_order:99}]);
+  await loadAllData(); hideLoading(); closeModal('modal-budget-item'); renderProposedBudget();
+  toast('✓ Budget line added');
+}
+
+async function updateProposedLine(type,id,field,value) {
+  const payload=field==='proposed'?{proposed:parseFloat(value)||0}:{commentary:value};
+  await sb.from('proposed_budget').update(payload).eq('id',id);
+  const arr=type==='income'?state.proposedIncome:state.proposedExpense;
+  const line=arr.find(l=>l.id===id);
+  if(line) line[field]=field==='proposed'?parseFloat(value)||0:value;
+}
+
+async function deleteProposedLine(type,id) {
+  if(!confirm('Remove this line?')) return;
+  showLoading('Removing...');
+  await sb.from('proposed_budget').delete().eq('id',id);
+  await loadAllData(); hideLoading(); renderProposedBudget();
+  toast('✓ Line removed');
+}
+
+async function addProposedLine(type) {
+  document.getElementById('budget-item-id').value='';
+  document.getElementById('budget-item-type').value=type;
+  document.getElementById('budget-cat').value='';
+  document.getElementById('budget-amount').value='';
+  document.getElementById('budget-notes').value='';
+  document.getElementById('budget-modal-title').textContent=`Add ${type==='income'?'Income':'Expense'} Line`;
+  openModal('modal-budget-item');
+}
+
+// ── BALANCE SHEET ──────────────────────────────────────────────
+async function updateBSManualLine(section,id,field,value) {
+  const payload=field==='balance'?{balance:parseFloat(value)||0,updated_at:new Date().toISOString()}:{commentary:value,updated_at:new Date().toISOString()};
+  await sb.from('bs_manual').update(payload).eq('id',id);
+  const arr=section==='assets'?state.bsManualAssets:state.bsManualLiabilities;
+  const line=arr.find(l=>l.id===id);
+  if(line) line[field]=field==='balance'?parseFloat(value)||0:value;
+}
+
+async function addCDLine() {
+  const num=state.bsManualAssets.filter(a=>a.id.startsWith('bs-cd')).length+1;
+  const newId=`bs-cd-user-${Date.now()}`;
+  showLoading('Adding CD...');
+  await sb.from('bs_manual').insert([{id:newId,section:'assets',label:`CD #${num}`,balance:0,commentary:'',sort_order:num+1}]);
+  await loadAllData(); hideLoading(); renderBalanceSheet();
+  toast('✓ CD line added');
+}
+
+async function deleteCDLine(id) {
+  if(!confirm('Remove this CD line?')) return;
+  showLoading('Removing...');
+  await sb.from('bs_manual').delete().eq('id',id);
+  await loadAllData(); hideLoading(); renderBalanceSheet();
+  toast('✓ CD line removed');
+}
+
+async function setPYISCommentary(category,value) {
+  state.pyisCommentary[category]=value;
+  await sb.from('pyis_commentary').upsert([{category,commentary:value,updated_at:new Date().toISOString()}],{onConflict:'category'});
+}
+
+// ── ADMIN ──────────────────────────────────────────────────────
+async function renderAdmin() {
+  const {data:users}=await sb.from('users').select('*').order('username');
+  const tbody=document.getElementById('admin-user-table');
+  if(!users?.length){tbody.innerHTML='<tr><td colspan="5" class="muted">No users found.</td></tr>';return;}
+  tbody.innerHTML=users.map(u=>`<tr>
+    <td><strong>${u.username}</strong></td>
+    <td><span class="badge ${u.role==='Admin'?'badge-admin':u.role==='Treasurer'?'badge-treasurer':'badge-readonly'}">${u.role}</span></td>
+    <td><span class="badge ${u.force_change?'badge-due':'badge-paid'}">${u.force_change?'Pending Password Change':'Active'}</span></td>
+    <td class="muted">${u.last_login?new Date(u.last_login).toLocaleDateString():'Never'}</td>
+    <td>${u.id!==currentUser?.id?`<button class="btn btn-xs btn-outline" onclick="editUserRole('${u.id}','${u.role}','${u.username}')">Edit Role</button>`:'<span class="muted" style="font-size:11px;">Current user</span>'}</td>
+  </tr>`).join('');
+}
+
+function editUserRole(userId,currentRole,username) {
+  document.getElementById('edit-user-orig').value=userId;
+  document.getElementById('new-username').value=username;
+  document.getElementById('new-password').value='';
+  document.getElementById('new-role').value=currentRole;
+  document.getElementById('add-user-title').textContent='Edit User Role';
+  openModal('modal-add-user');
+}
+
+async function saveUser() {
+  const orig=document.getElementById('edit-user-orig').value;
+  const username=document.getElementById('new-username').value.trim();
+  const role=document.getElementById('new-role').value;
+  if(!username){alert('Username is required.');return;}
+  showLoading('Saving...');
+  if(orig){
+    await sb.from('users').update({username,role}).eq('id',orig);
+  } else {
+    alert('To add a new user: go to Supabase Dashboard → Authentication → Users → Invite User, then set their role here.');
+    hideLoading(); closeModal('modal-add-user'); return;
+  }
+  document.getElementById('edit-user-orig').value='';
+  document.getElementById('add-user-title').textContent='Add User';
+  await renderAdmin(); hideLoading(); closeModal('modal-add-user');
+  toast('✓ User updated');
+}
+
+async function deleteUser(userId,username) {
+  if(!confirm(`Remove "${username}" from Square Books?`)) return;
+  showLoading('Removing...');
+  await sb.from('users').delete().eq('id',userId);
+  await renderAdmin(); hideLoading();
+  toast('✓ User removed');
+}
+
+// ── BACKUP ─────────────────────────────────────────────────────
+async function doBackup() {
+  showLoading('Preparing backup...');
+  await loadAllData();
+  const backup={_meta:{app:'Square Books',version:2,date:new Date().toISOString(),source:'supabase',counts:{homeowners:state.homeowners.length,invoices:state.invoices.length,payments:state.payments.length,vendors:state.vendors.length,bills:state.bills.length}},
+    homeowners:state.homeowners,invoices:state.invoices,payments:state.payments,vendors:state.vendors,
+    bills:state.bills,billPayments:state.billPayments,bankTransactions:state.bankTransactions,
+    proposedIncome:state.proposedIncome,proposedExpense:state.proposedExpense,
+    bsManualAssets:state.bsManualAssets,bsManualLiabilities:state.bsManualLiabilities,
+    pyisCommentary:state.pyisCommentary};
+  hideLoading();
+  const blob=new Blob([JSON.stringify(backup,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=`SquareBooks-Backup-${today()}.json`; a.click();
+  URL.revokeObjectURL(url); toast('✓ Backup downloaded');
+}
+
+function triggerRestore() { alert('To restore a backup, contact your administrator. Automatic restore is disabled in the cloud version to protect your data.'); }
+function doRestore() {}
+function confirmRestore() {}
+
+// ── HELPERS ────────────────────────────────────────────────────
+function hwName(hw)    { if(!hw) return '—'; return hw.lastName+' · '+hw.address; }
+function getHw(id)     { return state.homeowners.find(h=>h.id==id); }
+function getVendor(id) { return state.vendors.find(v=>v.id==id); }
+
+function invoiceBalance(inv) { return inv.amount-state.payments.filter(p=>p.invoiceId==inv.id&&p.status!=='voided').reduce((s,p)=>s+p.amount,0); }
+function billBalance(bill)   { return bill.amount-state.billPayments.filter(p=>p.billId==bill.id&&p.status!=='voided').reduce((s,p)=>s+p.amount,0); }
+function invoiceStatus(inv)  { if(inv.status==='voided') return 'voided'; const b=invoiceBalance(inv); if(b<=0) return 'paid'; if(inv.dueDate&&inv.dueDate<today()) return 'overdue'; return 'due'; }
+function billStatus(bill)    { if(bill.status==='voided') return 'voided'; return billBalance(bill)<=0?'paid':'due'; }
+function badgeHtml(status)   { const m={paid:'badge-paid',due:'badge-due',overdue:'badge-overdue',voided:'badge-voided'}; return `<span class="badge ${m[status]||'badge-due'}">${status.charAt(0).toUpperCase()+status.slice(1)}</span>`; }
+function calcHwBalance(hwId) { return state.invoices.filter(i=>i.homeownerId==hwId&&i.status!=='voided').reduce((s,i)=>s+i.amount,0)-state.payments.filter(p=>p.homeownerId==hwId&&p.status!=='voided').reduce((s,p)=>s+p.amount,0); }
+function calcHwBalanceAsOf(hwId,asofDate) { return state.invoices.filter(i=>i.homeownerId===hwId&&i.status!=='voided'&&i.date<=asofDate).reduce((s,i)=>s+i.amount,0)-state.payments.filter(p=>p.homeownerId===hwId&&p.status!=='voided'&&p.date<=asofDate).reduce((s,p)=>s+p.amount,0); }
+
+function populateSelect(id,items,mapper,emptyLabel='— Select —') {
+  const sel=document.getElementById(id); if(!sel) return;
+  const cur=sel.value; sel.innerHTML=`<option value="">${emptyLabel}</option>`;
+  items.forEach(item=>{ const {value,label}=mapper(item); const o=document.createElement('option'); o.value=value; o.textContent=label; sel.appendChild(o); });
+  if(cur) sel.value=cur;
+}
+function downloadCSV(rows,filename) {
+  const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob=new Blob([csv],{type:'text/csv'}); const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=filename; a.click(); URL.revokeObjectURL(url);
+}
+
+// Set today's date on date inputs
+document.querySelectorAll('input[type=date]').forEach(inp=>{ if(!inp.value) inp.value=today(); });
+document.querySelector('[onclick="openModal(\'modal-homeowner\')"]')?.addEventListener('click',openAddHomeowner);
+
+// ── INIT ───────────────────────────────────────────────────────
+checkSession();
 </script>
 </body>
 </html>
