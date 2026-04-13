@@ -1292,6 +1292,7 @@
           <div><h2>Homeowners</h2><p>Heritage Square — 29 units</p></div>
           <div class="actions-bar">
             <button class="btn btn-navy" onclick="openModal('modal-homeowner')">+ Add Homeowner</button>
+            <button class="btn btn-outline" onclick="openModal('modal-import-homeowners')">⬆ Import CSV</button>
             <button class="btn btn-outline" onclick="exportHomeowners()">Export CSV</button>
           </div>
         </div>
@@ -1996,6 +1997,33 @@
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-budget-item')">Cancel</button>
       <button class="btn btn-navy" onclick="saveBudgetItem()">Add Line</button>
+    </div>
+  </div>
+</div>
+
+<!-- HOMEOWNER CSV IMPORT -->
+<div class="modal-overlay" id="modal-import-homeowners">
+  <div class="modal modal-lg">
+    <div class="modal-header">
+      <div><h3>Import Homeowners from CSV</h3><div class="modal-sub">Three columns: Last Name, Address, Email (optional)</div></div>
+      <button class="modal-close" onclick="closeModal('modal-import-homeowners')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="info-box" style="margin-bottom:14px;">
+        Paste your CSV data below. First row should be headers or data — Square Books will auto-detect.<br>
+        <strong>Format:</strong> Last Name, Street Address, Email (one homeowner per line).<br>
+        <strong>Example:</strong> Smith, 14 Oak Lane, smith@email.com
+      </div>
+      <div class="field">
+        <label>CSV Data *</label>
+        <textarea id="import-csv-data" rows="10" placeholder="Smith, 14 Oak Lane, smith@email.com&#10;Jones, 22 Maple Drive, jones@email.com&#10;Williams, 8 Pine Street," style="font-family:'IBM Plex Mono',monospace;font-size:12px;"></textarea>
+      </div>
+      <div id="import-preview" style="margin-top:12px;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="previewImport()">Preview</button>
+      <button class="btn btn-outline" onclick="closeModal('modal-import-homeowners')">Cancel</button>
+      <button class="btn btn-navy" id="import-confirm-btn" onclick="confirmImport()" style="display:none;">Import All</button>
     </div>
   </div>
 </div>
@@ -4860,6 +4888,65 @@ function downloadCSV(rows,filename) {
 // Set today's date on date inputs
 document.querySelectorAll('input[type=date]').forEach(inp=>{ if(!inp.value) inp.value=today(); });
 document.querySelector('[onclick="openModal(\'modal-homeowner\')"]')?.addEventListener('click',openAddHomeowner);
+
+// ── CSV IMPORT ─────────────────────────────────────────────────
+let pendingImportRows = [];
+
+function previewImport() {
+  const raw = document.getElementById('import-csv-data').value.trim();
+  if (!raw) { alert('Please paste CSV data first.'); return; }
+  const lines = raw.split('\n').map(l=>l.trim()).filter(Boolean);
+  pendingImportRows = [];
+  const errors = [];
+  lines.forEach((line, idx) => {
+    if (idx===0 && /last.?name|address|email/i.test(line)) return;
+    const parts = line.split(',').map(p=>p.trim());
+    const lastName=parts[0]||'', address=parts[1]||'', email=parts[2]||'';
+    if (!lastName||!address) { errors.push(`Row ${idx+1}: "${line}"`); return; }
+    pendingImportRows.push({lastName,address,email});
+  });
+  const preview=document.getElementById('import-preview');
+  const btn=document.getElementById('import-confirm-btn');
+  if (!pendingImportRows.length) {
+    preview.innerHTML=`<div class="info-box" style="background:var(--danger-bg);border-color:rgba(155,35,53,0.3);color:var(--danger);">No valid rows found. Check your format.</div>`;
+    btn.style.display='none'; return;
+  }
+  const errHtml=errors.length?`<div style="margin-bottom:8px;font-size:12px;color:var(--danger);">⚠ ${errors.length} row(s) skipped</div>`:'';
+  preview.innerHTML=`${errHtml}
+    <div style="font-size:12px;font-weight:600;color:var(--ember);margin-bottom:8px;">${pendingImportRows.length} homeowner(s) ready to import:</div>
+    <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr style="background:#f8fafc;">
+          <th style="padding:6px 12px;text-align:left;border-bottom:1px solid var(--border);">Last Name</th>
+          <th style="padding:6px 12px;text-align:left;border-bottom:1px solid var(--border);">Address</th>
+          <th style="padding:6px 12px;text-align:left;border-bottom:1px solid var(--border);">Email</th>
+        </tr></thead>
+        <tbody>${pendingImportRows.map(r=>`<tr>
+          <td style="padding:5px 12px;border-bottom:1px solid var(--border);">${r.lastName}</td>
+          <td style="padding:5px 12px;border-bottom:1px solid var(--border);">${r.address}</td>
+          <td style="padding:5px 12px;border-bottom:1px solid var(--border);color:var(--text-muted);">${r.email||'—'}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+  btn.style.display='';
+  btn.textContent=`Import ${pendingImportRows.length} Homeowner(s)`;
+}
+
+async function confirmImport() {
+  if (!pendingImportRows.length) return;
+  showLoading(`Importing ${pendingImportRows.length} homeowners...`);
+  const rows=pendingImportRows.map(r=>({last_name:r.lastName,address:r.address,email:r.email||null,status:'active'}));
+  const {error}=await sb.from('homeowners').insert(rows);
+  if (error) { hideLoading(); alert('Import error: '+error.message); return; }
+  await loadAllData(); hideLoading();
+  closeModal('modal-import-homeowners');
+  document.getElementById('import-csv-data').value='';
+  document.getElementById('import-preview').innerHTML='';
+  document.getElementById('import-confirm-btn').style.display='none';
+  pendingImportRows=[];
+  renderAll();
+  toast(`✓ Imported ${rows.length} homeowners`);
+}
 
 // ── INIT ───────────────────────────────────────────────────────
 checkSession();
