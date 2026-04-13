@@ -202,16 +202,16 @@
   .sidebar-brand h2 {
     font-family: 'Cinzel', serif;
     color: var(--gold);
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 700;
     white-space: nowrap;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.3px;
   }
 
   .sidebar-brand p {
     color: rgba(255,255,255,0.35);
-    font-size: 10px;
-    letter-spacing: 2px;
+    font-size: 9px;
+    letter-spacing: 1.2px;
     text-transform: uppercase;
     margin-top: 3px;
     white-space: nowrap;
@@ -313,6 +313,7 @@
   /* ── MAIN CONTENT ── */
   .main {
     margin-left: var(--sidebar-w);
+    width: calc(100% - var(--sidebar-w));
     height: 100vh;
     overflow-y: auto;
     display: flex;
@@ -1070,7 +1071,7 @@
       </svg>
       <h1>Square Books</h1>
       <div class="login-divider"></div>
-      <p>Heritage Square &nbsp;·&nbsp; Est. 1992</p>
+      <p>Heritage Square &nbsp;·&nbsp; Est. 1990</p>
     </div>
     <div class="form-group">
       <label>Email</label>
@@ -1116,7 +1117,7 @@
   <aside class="sidebar">
     <div class="sidebar-brand">
       <div style="display:flex;align-items:center;gap:10px;">
-        <svg width="32" height="32" viewBox="0 0 280 260" xmlns="http://www.w3.org/2000/svg" class="phoenix-flame" style="flex-shrink:0;">
+        <svg width="26" height="26" viewBox="0 0 280 260" xmlns="http://www.w3.org/2000/svg" class="phoenix-flame" style="flex-shrink:0;">
           <defs>
             <linearGradient id="slw" x1="0%" y1="100%" x2="100%" y2="0%">
               <stop offset="0%" stop-color="#7b0d00"/>
@@ -1174,7 +1175,7 @@
         </svg>
         <div>
           <h2>Square Books</h2>
-          <p>Heritage Square &nbsp;·&nbsp; Est. 1992</p>
+          <p>Heritage Square &nbsp;·&nbsp; Est. 1990</p>
         </div>
       </div>
     </div>
@@ -4364,7 +4365,7 @@ function buildStatementHTML(hw, balance, openInvs, recentPmts, stmtDate, periodL
         ${miniPhoenix}
         <div>
           <h2>Heritage Square HOA</h2>
-          <p>Est. 1992 &nbsp;·&nbsp; Community Statement</p>
+          <p>Est. 1990 &nbsp;·&nbsp; Community Statement</p>
         </div>
       </div>
       <div class="stmt-letterhead-right">
